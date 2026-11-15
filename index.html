@@ -143,11 +143,20 @@ function unb64(s){var b=atob(s),u=new Uint8Array(b.length);for(var i=0;i<b.lengt
 function norm(p){return String(p).trim().toLowerCase()}
 function deriveKey(pass,salt){return crypto.subtle.importKey('raw',TE.encode(norm(pass)),'PBKDF2',false,['deriveKey']).then(function(k){
   return crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:250000,hash:'SHA-256'},k,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])})}
-function decryptData(pass){var e=RAW.enc;return deriveKey(pass,unb64(e.salt)).then(function(key){
+function decryptData(pass,raw){var e=(raw||RAW).enc;return deriveKey(pass,unb64(e.salt)).then(function(key){
   return crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(e.iv)},key,unb64(e.ct))}).then(function(buf){return JSON.parse(TD.decode(buf))})}
 function encryptData(D){var salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12));
   return deriveKey(PASS,salt).then(function(key){return crypto.subtle.encrypt({name:'AES-GCM',iv:iv},key,TE.encode(JSON.stringify(D)))})
   .then(function(ct){return{enc:{v:1,salt:b64(salt),iv:b64(iv),ct:b64(new Uint8Array(ct))}}})}
+var SHEET_URL='https://script.google.com/macros/s/AKfycbypKQRnvtIRZVi5Mg2GGTLFUqn1-8y7z6EWYKPw0_-S1x96BWczAu50lL1dFUGG-bgQ/exec';
+var MODE=(window.claude&&typeof window.claude.use==='function')?'artifact':(SHEET_URL?'remote':'local');
+var REMOTE={version:null,offline:false,seed:false};
+function api(body){return fetch(SHEET_URL,{method:'POST',body:JSON.stringify(body)}).then(function(r){return r.json()})
+  .then(function(j){if(!j||!j.ok){var e=new Error((j&&j.error)||'bad_response');e.version=j&&j.version;throw e}return j})}
+function tidy(d){var ps=(d.people||[]).filter(function(p){return p&&p.id});var mx=0;ps.forEach(function(p){p.r=Number(p.r)||0;p.parents=Array.isArray(p.parents)?p.parents:[];if(isFinite(p.x)&&p.x!==''&&p.x!==null)mx=Math.max(mx,+p.x)});
+  ps.forEach(function(p){if(!(isFinite(p.x)&&p.x!==''&&p.x!==null)){mx+=175;p.x=mx}else p.x=+p.x;if(!p.side)p.side='both'});
+  var ids={};ps.forEach(function(p){ids[p.id]=1});ps.forEach(function(p){p.parents=p.parents.filter(function(x){return ids[x]})});
+  return{people:ps,couples:(d.couples||[]).filter(function(c){return c&&ids[c[0]]&&ids[c[1]]})}}
 var CREST='<svg class="crest" viewBox="0 0 42 50" aria-hidden="true"><defs><linearGradient id="cg0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7a5512"/><stop offset=".35" stop-color="#e6c56b"/><stop offset=".6" stop-color="#a87b26"/><stop offset=".85" stop-color="#f2dd94"/><stop offset="1" stop-color="#8a6114"/></linearGradient></defs>'+
  '<path d="M3 3h36v20c0 13-8 21-18 25C11 44 3 36 3 23z" fill="#7e2b22" stroke="url(#cg0)" stroke-width="3"/>'+
  '<path d="M21 11v26M21 20l-7 6M21 20l7 6M21 28l-5 4M21 28l5 4" stroke="#f2dd94" stroke-width="1.8" stroke-linecap="round" fill="none"/><circle cx="21" cy="10" r="2.6" fill="#f2dd94"/></svg>';
@@ -156,7 +165,9 @@ document.body.insertAdjacentHTML('afterbegin','<div class="lock" id="lock"><form
   '<input type="password" id="pw" placeholder="Password" aria-label="Password" autocomplete="current-password" autofocus>'+
   '<button class="btn" type="submit" id="pwBtn">ENTER</button><p class="err" id="pwErr" role="alert"></p></form></div>');
 function tryUnlock(p,silent){var btn=document.getElementById('pwBtn');if(!silent){btn.disabled=true;btn.textContent='OPENING\u2026'}
-  return decryptData(p).then(function(D){PASS=p;try{sessionStorage.setItem('ft-pass',p)}catch(e){}
+  return decryptData(p,RAW).then(function(D0){if(MODE!=='remote')return D0;
+    return api({action:'load',password:norm(p)}).then(function(j){REMOTE.version=j.version;if(j.empty){REMOTE.seed=true;return D0}return tidy(j)})
+      .catch(function(e){if(/not_allowed/.test(e.message))throw e;REMOTE.offline=true;return D0})}).then(function(D){PASS=p;try{sessionStorage.setItem('ft-pass',p)}catch(e){}
     document.getElementById('lock').remove();boot(D)}).catch(function(){
     btn.disabled=false;btn.textContent='ENTER';if(!silent){document.getElementById('pwErr').textContent='That password isn\u2019t right. Try again.';var i=document.getElementById('pw');i.select()}})}
 if(!(window.crypto&&crypto.subtle)){document.getElementById('pwErr').textContent='This browser can\u2019t open the locked tree.'}
@@ -407,11 +418,13 @@ function resize(file,max,q){return new Promise(function(res,rej){var img=new Ima
   img.onload=function(){var s=Math.min(1,max/Math.max(img.width,img.height)),c=document.createElement('canvas');c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);
     c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(u);c.toBlob(function(b){b?res(b):rej(new Error('resize'))},'image/jpeg',q)};
   img.onerror=function(){rej(new Error('image'))};img.src=u})}
+function smallPhoto(f){var tries=[[320,.8],[260,.72],[200,.65],[160,.55]];
+  return (function next(i){return resize(f,tries[i][0],tries[i][1]).then(toDataURL).then(function(u){return(u.length<45000||i===tries.length-1)?u:next(i+1)})})(0)}
 function toDataURL(blob){return new Promise(function(res){var r=new FileReader();r.onload=function(){res(r.result)};r.readAsDataURL(blob)})}
 $('file').onchange=function(){var f=this.files&&this.files[0];this.value='';if(!f||!selected)return;var p=byId(selected);setStatus('Adding portrait…');
   resize(f,720,.85).then(function(blob){return assetsP.then(function(a){
     if(a)return a.upload(blob).then(function(r){return r.url}).catch(function(){return resize(f,320,.8).then(toDataURL)});
-    return resize(f,320,.8).then(toDataURL)})}).then(function(url){p.img=url;commit()}).catch(function(){setStatus('That photo couldn’t be read')})};
+    return smallPhoto(f)})}).then(function(url){p.img=url;commit()}).catch(function(){setStatus('That photo couldn’t be read')})};
 
 // ---------- saving ----------
 var saveT=null;
@@ -425,7 +438,19 @@ function buildDoc(){return encryptData(D).then(function(ED){
     '<script id="data" type="application/json">'+json+E+'\n<script id="app">'+$('app').textContent+E+'\n</body>\n</html>\n';
 })}
 function persistView(){try{sessionStorage.setItem('ft-view',JSON.stringify({v:v,selected:selected,side:side}))}catch(e){}}
-function doSave(){artP.then(function(a){
+function saveRemote(){
+  if(REMOTE.offline){setStatus('Offline — changes aren’t saved');return}
+  api({action:'save',password:norm(PASS),version:REMOTE.version,people:D.people,couples:D.couples})
+  .then(function(j){REMOTE.version=j.version;setStatus('All changes saved')})
+  .catch(function(e){var m=String(e&&e.message||e);
+    if(/conflict/.test(m)){setStatus('Someone else just made changes — showing the latest');refreshRemote(true)}
+    else if(/not_allowed/.test(m))setStatus('Couldn’t save — password not accepted');
+    else setStatus('Couldn’t save — check your connection')})}
+function refreshRemote(force){var before=REMOTE.version;
+  api({action:'load',password:norm(PASS)}).then(function(j){if(j.empty||(!force&&j.version===before))return;REMOTE.version=j.version;
+    D=tidy(j);var sel=selected;rebuild();if(sel&&byId(sel)){addMode=null;drawPanel()}else if(sel)clearSel()}).catch(function(){})}
+document.addEventListener('visibilitychange',function(){if(MODE==='remote'&&!document.hidden&&!saveT&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))refreshRemote(false)});
+function doSave(){saveT=null;if(MODE==='remote')return saveRemote();artP.then(function(a){
   if(!a){setStatus(CL?'Saving isn’t available in this view':'Changes last until you close this page');return}
   persistView();
   return buildDoc().then(function(html){return a.publish(html)}).then(function(){setStatus('All changes saved')}).catch(function(e){
@@ -480,8 +505,10 @@ rebuild();
 var saved=null;try{saved=JSON.parse(sessionStorage.getItem('ft-view')||'null');sessionStorage.removeItem('ft-view')}catch(e){}
 if(saved&&saved.v){v=saved.v;apply();if(saved.side&&saved.side!=='all'){side=saved.side;document.querySelectorAll('.seg button').forEach(function(x){x.setAttribute('aria-pressed',String(x.getAttribute('data-side')===side))})}
   if(saved.selected&&byId(saved.selected)){selected=saved.selected;drawPanel();panel.hidden=false;hideHint()}applyState();setStatus('All changes saved')}
-else if(innerWidth<760){var k=.5;v={k:k,x:innerWidth/2-862*k,y:innerHeight/2+30-560*k};apply()}
-else fitAll(true);
+if(MODE==='remote'&&!saved)setStatus(REMOTE.offline?'Offline \u2014 showing the last saved copy':'Changes save for everyone');
+if(MODE==='remote'&&REMOTE.seed){REMOTE.seed=false;save()}
+if(!(saved&&saved.v)){if(innerWidth<760){var k=.5;v={k:k,x:innerWidth/2-862*k,y:innerHeight/2+30-560*k};apply()}
+else fitAll(true)}
 }
 })();
 </script>

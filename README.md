@@ -6,4 +6,6 @@ An interactive, Renaissance-style family tree in a single page (`index.html`).
 - Edit names and relationships, add photos and notes, and add or remove relatives.
 - The page is password-protected: the family data is encrypted inside the file and only opens with the password.
 
-Open `index.html` in a browser to view it. Edits made in this local copy last until the page is closed; the live, saving version is the Claude artifact.
+Live site: https://mformanas.github.io/easy-family-tree/
+
+Edits made on the site are saved to the family's Google Sheet (through a small Apps Script web app), so everyone with the password sees the same tree. Names, relationships and notes can also be edited directly in the sheet's **People** and **Couples** tabs.
